@@ -1,0 +1,24 @@
+name: Ohtani Tracker
+
+on:
+  schedule:
+    # Runs at 17:00 UTC (10:00 AM PT) every day
+    - cron: '0 17 * * *'
+  workflow_dispatch: # Allows manual testing from the UI
+
+jobs:
+  check-pitcher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install requests
+      
+      - name: Run Script
+        run: python check_ohtani.py
