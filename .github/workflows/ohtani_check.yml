@@ -2,23 +2,37 @@ name: Ohtani Tracker
 
 on:
   schedule:
-    # Runs at 17:00 UTC (10:00 AM PT) every day
-    - cron: '0 17 * * *'
-  workflow_dispatch: # Allows manual testing from the UI
+    - cron: '0 16 * * *'   # 9 AM PT
+    - cron: '0 18 * * *'   # 11 AM PT
+    - cron: '0 20 * * *'   # 1 PM PT
+    - cron: '0 22 * * *'   # 3 PM PT
+    - cron: '0 0 * * *'    # 5 PM PT
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   check-pitcher:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
       - name: Install dependencies
         run: pip install requests
-      
-      - name: Run Script
+
+      - name: Run script
         run: python check_ohtani.py
+
+      - name: Commit state changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --staged --quiet || git commit -m "chore: update state [skip ci]"
+          git push

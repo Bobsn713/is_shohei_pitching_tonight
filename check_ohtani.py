@@ -4,40 +4,42 @@ import datetime
 import time
 import json
 import os
+from zoneinfo import ZoneInfo
 
 # Configuration
 NTFY_TOPIC = "brants-dodgers-alert-99"
 DODGERS_ID = 119
-OHANTANI_ID = 660271
+OHTANI_ID = 660271
 MLB_API_URL = "https://statsapi.mlb.com/api/v1/schedule"
 MAX_RETRIES = 3
-RETRY_DELAY = 5  # seconds
-FAILURE_FILE = "failure_count.json"
+RETRY_DELAY = 5
+STATE_FILE = "state.json"
+PT_TZ = ZoneInfo("America/Los_Angeles")
 
 
-def load_failure_count():
-    """Load consecutive failure count from file"""
-    if os.path.exists(FAILURE_FILE):
+def get_pt_date():
+    return datetime.datetime.now(PT_TZ).strftime('%Y-%m-%d')
+
+
+def load_state():
+    if os.path.exists(STATE_FILE):
         try:
-            with open(FAILURE_FILE, 'r') as f:
-                data = json.load(f)
-                return data.get('count', 0)
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
         except (json.JSONDecodeError, IOError):
-            return 0
-    return 0
+            pass
+    return {"last_notified_date": None, "failure_count": 0}
 
 
-def save_failure_count(count):
-    """Save consecutive failure count to file"""
-    with open(FAILURE_FILE, 'w') as f:
-        json.dump({'count': count}, f)
+def save_state(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
 
 
-def fetch_today_game():
+def fetch_today_game(date):
     """Fetch today's Dodgers game from MLB API with retry logic"""
-    today = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%d')
-    url = f"{MLB_API_URL}?sportId=1&teamId={DODGERS_ID}&hydrate=probablePitcher&date={today}"
-    
+    url = f"{MLB_API_URL}?sportId=1&teamId={DODGERS_ID}&hydrate=probablePitcher&date={date}"
+
     for attempt in range(MAX_RETRIES):
         try:
             response = requests.get(url, timeout=10)
@@ -50,15 +52,14 @@ def fetch_today_game():
             else:
                 print(f"API request failed after {MAX_RETRIES} attempts: {type(e).__name__}: {e}")
                 raise
-    return None
 
 
 def check_ohtani_pitching(data):
-    """Check if Ohtani is probable pitcher and return opponent name if so"""
+    """Return (opponent_name, pitcher_name) where opponent_name is set only if Ohtani is pitching"""
     dates = data.get('dates', [])
     if not dates:
-        return None  # No game today
-    
+        return None, None
+
     games = dates[0].get('games', [])
     for game in games:
         teams = game.get('teams', {})
@@ -66,53 +67,70 @@ def check_ohtani_pitching(data):
             team = teams.get(side, {})
             if team.get('team', {}).get('id') == DODGERS_ID:
                 pitcher = team.get('probablePitcher', {})
-                if pitcher.get('id') == OHANTANI_ID:
+                pitcher_name = pitcher.get('fullName')
+                if pitcher.get('id') == OHTANI_ID:
                     opponent_side = 'home' if side == 'away' else 'away'
                     opponent_name = teams[opponent_side]['team']['name']
-                    return opponent_name
-    return None
+                    return opponent_name, pitcher_name
+                return None, pitcher_name  # pitcher announced but not Ohtani (or not announced yet)
+    return None, None
 
 
 def send_notification(message):
-    """Send ntfy notification"""
     requests.post(
         f"https://ntfy.sh/{NTFY_TOPIC}",
         data=message,
-        headers={"Title": "Dodgers Alert ⚾️", "Priority": "high"}
+        headers={"Title": "Dodgers Alert", "Tags": "baseball", "Priority": "high"}
     )
     print(f"Notification sent: {message}")
 
 
 def main():
-    """Main function to check if Ohtani is pitching today and send notification"""
-    failure_count = load_failure_count()
-    
+    today = get_pt_date()
+    print(f"[{datetime.datetime.now(PT_TZ).strftime('%Y-%m-%d %H:%M PT')}] Running check for {today}")
+
+    state = load_state()
+
+    if state.get("last_notified_date") == today:
+        print("Already sent notification today — skipping")
+        return
+
     try:
-        data = fetch_today_game()
-        
-        # API succeeded - reset failure counter
-        if failure_count > 0:
-            save_failure_count(0)
-            print(f"API check succeeded - failure counter reset from {failure_count} to 0")
-        
-        if data is None:
+        data = fetch_today_game(today)
+
+        if state.get("failure_count", 0) > 0:
+            print(f"API succeeded — resetting failure count from {state['failure_count']} to 0")
+            state["failure_count"] = 0
+            save_state(state)
+
+        dates = data.get('dates', [])
+        if not dates:
+            print("No Dodgers game today")
             return
-        
-        opponent_name = check_ohtani_pitching(data)
+
+        opponent_name, pitcher_name = check_ohtani_pitching(data)
+
         if opponent_name:
-            send_notification(f"Shohei Ohtani is the probable pitcher today vs {opponent_name}!")
-        
+            message = f"Shohei Ohtani is the probable pitcher today vs {opponent_name}!"
+            send_notification(message)
+            state["last_notified_date"] = today
+            save_state(state)
+        elif pitcher_name:
+            print(f"Probable pitcher: {pitcher_name} (not Ohtani) — no notification")
+        else:
+            print("Dodgers game today but probable pitcher not yet announced — will check again later")
+
     except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as e:
-        # API failed - increment counter
-        failure_count += 1
-        save_failure_count(failure_count)
-        print(f"API check failed - failure count now: {failure_count}")
-        
-        if failure_count >= 3:
+        state["failure_count"] = state.get("failure_count", 0) + 1
+        print(f"API check failed — consecutive failure count: {state['failure_count']}")
+
+        if state["failure_count"] >= 3:
             send_notification("MLB schedule check failed for 3 consecutive days")
-            save_failure_count(0)  # Reset after notification
-            print("3 consecutive failures reached - notification sent, counter reset")
-        
+            state["failure_count"] = 0
+            print("3 consecutive failures — alert sent, count reset")
+
+        save_state(state)
+
     except Exception as e:
         print(f"Unexpected error: {type(e).__name__}: {e}")
 

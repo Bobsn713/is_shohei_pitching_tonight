@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Is Shohei Pitching Tonight?</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0a0f1e;
+      color: #fff;
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: 2rem;
+    }
+
+    .card {
+      text-align: center;
+      max-width: 480px;
+      width: 100%;
+    }
+
+    .label {
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #7a8fbb;
+      margin-bottom: 1.5rem;
+    }
+
+    .answer {
+      font-size: clamp(4rem, 18vw, 7rem);
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -0.03em;
+      margin-bottom: 1.5rem;
+      transition: color 0.3s;
+    }
+
+    .answer.yes   { color: #00c46a; }
+    .answer.no    { color: #ff4a4a; }
+    .answer.maybe { color: #f5a623; }
+    .answer.wait  { color: #4a6fa5; }
+
+    .details {
+      font-size: 1.1rem;
+      color: #a0b0cc;
+      line-height: 1.6;
+      min-height: 3.5rem;
+    }
+
+    .details strong { color: #d0dff5; }
+
+    .meta {
+      margin-top: 2.5rem;
+      font-size: 0.8rem;
+      color: #3d5080;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .refresh-btn {
+      margin-top: 2rem;
+      background: none;
+      border: 1px solid #2a3a5c;
+      color: #5a7ab0;
+      font-size: 0.85rem;
+      font-family: inherit;
+      padding: 0.5rem 1.25rem;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .refresh-btn:hover { border-color: #4a6fa5; color: #8aaad0; }
+
+    .dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4a6fa5;
+      animation: pulse 1.4s ease-in-out infinite;
+      vertical-align: middle;
+      margin-right: 0.4rem;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.2; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <p class="label">⚾ Dodgers — Shohei Ohtani</p>
+    <div class="answer wait" id="answer"><span class="dot"></span></div>
+    <p class="details" id="details"></p>
+    <button class="refresh-btn" onclick="check()">Check again</button>
+    <div class="meta">
+      <span id="checked-at"></span>
+      <span id="pt-date"></span>
+    </div>
+  </div>
+
+  <script>
+    const OHTANI_ID = 660271;
+    const DODGERS_ID = 119;
+
+    function ptDate() {
+      return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    }
+
+    function ptTime() {
+      return new Date().toLocaleTimeString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        hour: 'numeric', minute: '2-digit', hour12: true
+      });
+    }
+
+    function gameTime(dateTimeUtc) {
+      if (!dateTimeUtc) return null;
+      return new Date(dateTimeUtc).toLocaleTimeString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        hour: 'numeric', minute: '2-digit', hour12: true
+      });
+    }
+
+    function set(answerClass, answerText, detailsHtml) {
+      const a = document.getElementById('answer');
+      a.className = 'answer ' + answerClass;
+      a.innerHTML = answerText;
+      document.getElementById('details').innerHTML = detailsHtml;
+    }
+
+    async function check() {
+      set('wait', '<span class="dot"></span>', 'Checking MLB schedule…');
+
+      const today = ptDate();
+      document.getElementById('pt-date').textContent = today + ' PT';
+
+      try {
+        const url = `https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=${DODGERS_ID}&hydrate=probablePitcher&date=${today}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        const dates = data.dates ?? [];
+        if (!dates.length) {
+          set('no', 'No game', 'The Dodgers are off today.');
+          return;
+        }
+
+        const game = dates[0].games?.[0];
+        if (!game) {
+          set('no', 'No game', 'The Dodgers are off today.');
+          return;
+        }
+
+        const teams = game.teams ?? {};
+        let dodgersSide, opponentSide, opponentName, time;
+
+        for (const side of ['away', 'home']) {
+          if (teams[side]?.team?.id === DODGERS_ID) {
+            dodgersSide  = side;
+            opponentSide = side === 'away' ? 'home' : 'away';
+            opponentName = teams[opponentSide]?.team?.name ?? 'Unknown';
+            time = gameTime(game.gameDate);
+          }
+        }
+
+        const pitcher = teams[dodgersSide]?.probablePitcher;
+
+        if (pitcher?.id === OHTANI_ID) {
+          set('yes', 'YES', `Shohei Ohtani starts tonight vs <strong>${opponentName}</strong>${time ? ' at <strong>' + time + '</strong>' : ''}.`);
+        } else if (pitcher?.fullName) {
+          set('no', 'NO', `Today's starter is <strong>${pitcher.fullName}</strong> vs ${opponentName}${time ? ' at ' + time : ''}.`);
+        } else {
+          set('maybe', 'TBD', `Dodgers vs <strong>${opponentName}</strong>${time ? ' at <strong>' + time + '</strong>' : ''}.<br>Probable pitcher not yet announced.`);
+        }
+      } catch (err) {
+        set('wait', 'Error', `Couldn't reach the MLB API. <br><small style="color:#5a7ab0">${err.message}</small>`);
+      }
+
+      document.getElementById('checked-at').textContent = 'Last checked ' + ptTime();
+    }
+
+    check();
+  </script>
+</body>
+</html>
