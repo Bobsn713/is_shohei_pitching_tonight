@@ -15,10 +15,20 @@ MAX_RETRIES = 3
 RETRY_DELAY = 5
 STATE_FILE = "state.json"
 PT_TZ = ZoneInfo("America/Los_Angeles")
+ET_TZ = ZoneInfo("America/New_York")
 
 
 def get_pt_date():
     return datetime.datetime.now(PT_TZ).strftime('%Y-%m-%d')
+
+
+def format_game_time_et(game_date_utc):
+    if not game_date_utc:
+        return None
+    dt = datetime.datetime.fromisoformat(game_date_utc.replace('Z', '+00:00'))
+    et = dt.astimezone(ET_TZ)
+    hour = et.hour % 12 or 12
+    return f"{hour}:{et.strftime('%M %p')} ET"
 
 
 def load_state():
@@ -55,14 +65,15 @@ def fetch_today_game(date):
 
 
 def check_ohtani_pitching(data):
-    """Return (opponent_name, pitcher_name) where opponent_name is set only if Ohtani is pitching"""
+    """Return (opponent_name, pitcher_name, game_time_et) where opponent_name is set only if Ohtani is pitching"""
     dates = data.get('dates', [])
     if not dates:
-        return None, None
+        return None, None, None
 
     games = dates[0].get('games', [])
     for game in games:
         teams = game.get('teams', {})
+        game_time_et = format_game_time_et(game.get('gameDate'))
         for side in ['away', 'home']:
             team = teams.get(side, {})
             if team.get('team', {}).get('id') == DODGERS_ID:
@@ -71,9 +82,9 @@ def check_ohtani_pitching(data):
                 if pitcher.get('id') == OHTANI_ID:
                     opponent_side = 'home' if side == 'away' else 'away'
                     opponent_name = teams[opponent_side]['team']['name']
-                    return opponent_name, pitcher_name
-                return None, pitcher_name  # pitcher announced but not Ohtani (or not announced yet)
-    return None, None
+                    return opponent_name, pitcher_name, game_time_et
+                return None, pitcher_name, game_time_et
+    return None, None, None
 
 
 def send_notification(message):
@@ -108,15 +119,17 @@ def main():
             print("No Dodgers game today")
             return
 
-        opponent_name, pitcher_name = check_ohtani_pitching(data)
+        opponent_name, pitcher_name, game_time_et = check_ohtani_pitching(data)
 
         if opponent_name:
-            message = f"Shohei Ohtani is the probable pitcher today vs {opponent_name}!"
+            time_str = f" at {game_time_et}" if game_time_et else ""
+            message = f"Shohei Ohtani is the probable pitcher today vs {opponent_name}{time_str}!"
             send_notification(message)
             state["last_notified_date"] = today
             save_state(state)
         elif pitcher_name:
-            print(f"Probable pitcher: {pitcher_name} (not Ohtani) — no notification")
+            time_str = f" at {game_time_et}" if game_time_et else ""
+            print(f"Probable pitcher: {pitcher_name} (not Ohtani){time_str} — no notification")
         else:
             print("Dodgers game today but probable pitcher not yet announced — will check again later")
 
